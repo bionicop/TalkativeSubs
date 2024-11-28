@@ -7,7 +7,10 @@ A powerful tool to convert subtitle files (SRT) to audio using Microsoft Edge's 
 - Convert single SRT files or entire folders
 - Multiple voice options with customizable settings
 - Progress tracking and continuation support
-- Batch processing with configurable settings
+- Batch processing with parallel execution
+- Automatic error recovery and retries
+- Configurable worker threads for optimal performance
+- Temporary file management with automatic cleanup
 
 ## Special Thanks
 
@@ -20,7 +23,7 @@ Special thanks to [rany2](https://github.com/rany2) for creating [edge-tts](http
 
 ## Installation
 
-1. Clone the respostry 
+1. Clone the repository:
 ```bash
 git clone https://github.com/bionicop/TalkativeSubs.git
 ```
@@ -30,7 +33,12 @@ git clone https://github.com/bionicop/TalkativeSubs.git
 pip install -r requirements.txt
 ```
 
-3. Install FFmpeg:
+3. For development, install additional dependencies:
+```bash
+pip install -r dev-requirements.txt
+```
+
+4. Install FFmpeg:
 - Windows: Download from [FFmpeg website](https://ffmpeg.org/download.html)
 - Linux: `sudo apt-get install ffmpeg`
 - macOS: `brew install ffmpeg`
@@ -49,8 +57,9 @@ python main.py
    - Monitor progress
 
 
-## Future Iterations  
-
+## Future Iterations
+- [x] Processing option like Max workers, batch size and retry attempts.
+- [x] Voice customization like rate, volume, pitch, word per minute.
 - [ ] Subtitle Translation
 - [ ] Add support for non-SRT subtitle formats (e.g., VTT, ASS).  
 - [ ] Add compatibility with more TTS engines (free ones)

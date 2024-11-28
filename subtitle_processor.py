@@ -9,10 +9,53 @@ class SubtitleProcessor:
         self.temp_dir = Path("temp_subtitles")
         self.progress_file = self.temp_dir / "progress.json"
         self.setup_temp_directory()
+        self.settings = self._load_settings()
+
+    def _load_settings(self) -> dict:
+        try:
+            if Path("app_settings.json").exists():
+                with open("app_settings.json", "r") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {
+            "max_workers": 15,
+            "batch_size": 10,
+            "retry_attempts": 3,
+            "cleanup_days": 7
+        }
 
     def setup_temp_directory(self):
-        """Create temp directory if it doesn't exist"""
+        """Create temp directory if it doesn't exist and clean old files"""
         self.temp_dir.mkdir(exist_ok=True)
+        self._cleanup_old_files()
+
+    def _cleanup_old_files(self):
+        """Clean up old temporary files based on settings"""
+        try:
+            cleanup_days = self.settings.get("cleanup_days", 7)
+            current_time = time.time()
+            max_age = cleanup_days * 24 * 60 * 60
+            
+            # Clean up old progress files
+            if self.progress_file.exists():
+                file_age = current_time - self.progress_file.stat().st_mtime
+                if file_age > max_age:
+                    self.progress_file.unlink()
+            
+            # Clean up old temp directories
+            for dir_path in self.temp_dir.iterdir():
+                if dir_path.is_dir():
+                    dir_age = current_time - dir_path.stat().st_mtime
+                    if dir_age > max_age:
+                        try:
+                            for file in dir_path.glob("*"):
+                                file.unlink()
+                            dir_path.rmdir()
+                        except Exception as e:
+                            print(f"Error cleaning up old files: {e}")
+        except Exception as e:
+            print(f"Error cleaning up old files: {e}")
 
     def save_progress(self, file_id: str, completed_segments: List[int]):
         """Save processing progress to a JSON file"""

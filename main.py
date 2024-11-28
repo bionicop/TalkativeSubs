@@ -8,12 +8,13 @@ from typing import Optional, Dict, List, Set
 import time
 import json
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 def main(page: ft.Page):
     page.title = "SubtitleToAudio"
     page.theme_mode = ft.ThemeMode.SYSTEM
-    page.window_width = 1000
-    page.window_height = 800
+    page.window.width = 1000
+    page.window.height = 800
     page.padding = 20
     page.bgcolor = ft.colors.BACKGROUND
     
@@ -28,6 +29,365 @@ def main(page: ft.Page):
     current_batch_start = 0
     current_file = None
     failed_segments: Dict[str, Set[int]] = {}
+    
+    # Settings dialog
+    def show_settings(e):
+        # Update fields with current settings
+        workers_field.value = str(audio_processor.settings.get("max_workers", 15))
+        batch_field.value = str(audio_processor.settings.get("batch_size", 10))
+        retry_field.value = str(audio_processor.settings.get("retry_attempts", 3))
+        voice_dropdown.value = audio_processor.settings.get("voice", "en-US-EmmaNeural")
+        auto_cleanup_switch.value = audio_processor.settings.get("auto_cleanup", True)
+        
+        # Update sliders
+        rate_slider.value = float(audio_processor.settings.get("rate", "+0%").rstrip("%")) / 100 * 50
+        volume_slider.value = float(audio_processor.settings.get("volume", "+0%").rstrip("%")) / 100 * 50
+        pitch_slider.value = float(audio_processor.settings.get("pitch", "+0Hz").rstrip("Hz"))
+        wpm_field.value = str(audio_processor.settings.get("words_per_minute", "")) if audio_processor.settings.get("words_per_minute") else ""
+        settings_dialog.open = True
+        page.update()
+
+    def close_settings(e=None):
+        settings_dialog.open = False
+        page.update()
+
+    def reset_to_defaults(e):
+        # Default values
+        workers_field.value = "15"
+        batch_field.value = "10"
+        retry_field.value = "3"
+        voice_dropdown.value = "en-US-EmmaNeural"
+        auto_cleanup_switch.value = True
+        rate_slider.value = 0
+        volume_slider.value = 0
+        pitch_slider.value = 0
+        wpm_field.value = ""
+        page.update()
+
+    def save_settings(e):
+        try:
+            new_workers = int(workers_field.value)
+            new_batch = int(batch_field.value)
+            new_retry = int(retry_field.value)
+            new_wpm = int(wpm_field.value) if wpm_field.value.strip() else None
+            new_auto_cleanup = auto_cleanup_switch.value
+
+            if not (1 <= new_workers <= 50):
+                raise ValueError("Max workers must be between 1 and 50")
+            if not (1 <= new_batch <= 100):
+                raise ValueError("Batch size must be between 1 and 100")
+            if not (1 <= new_retry <= 10):
+                raise ValueError("Retry attempts must be between 1 and 10")
+            if new_wpm is not None and not (50 <= new_wpm <= 600):
+                raise ValueError("Words per minute must be between 50 and 600")
+
+            # Format voice settings with proper signs
+            rate_val = float(rate_slider.value)
+            volume_val = float(volume_slider.value)
+            pitch_val = float(pitch_slider.value)
+
+            settings = {
+                "max_workers": new_workers,
+                "batch_size": new_batch,
+                "retry_attempts": new_retry,
+                "voice": voice_dropdown.value,
+                "rate": f"{int((rate_val / 50) * 100):+d}%",
+                "volume": f"{int((volume_val / 50) * 100):+d}%",
+                "pitch": f"{int(pitch_val):+d}Hz",
+                "words_per_minute": new_wpm,
+                "auto_cleanup": new_auto_cleanup,
+            }
+            
+            with open("app_settings.json", "w") as f:
+                json.dump(settings, f)
+            
+            audio_processor.settings = settings
+            audio_processor.executor = ThreadPoolExecutor(max_workers=new_workers)
+            
+            close_settings()
+            page.show_snack_bar(ft.SnackBar(content=ft.Text("Settings saved successfully!")))
+        except ValueError as e:
+            page.show_snack_bar(ft.SnackBar(content=ft.Text(str(e)), bgcolor=ft.colors.ERROR))
+        page.update()
+
+    # Settings fields with descriptions
+    workers_field = ft.TextField(
+        label="Max Workers (1-50)",
+        value="15",
+        width=300,
+        helper_text="Number of parallel processing threads",
+        text_size=14,
+        border_color=ft.colors.BLUE_200,
+        height=65,
+    )
+    
+    batch_field = ft.TextField(
+        label="Batch Size (1-100)",
+        value="10",
+        width=300,
+        helper_text="Number of segments to process at once",
+        text_size=14,
+        border_color=ft.colors.BLUE_200,
+        height=65,
+    )
+    
+    retry_field = ft.TextField(
+        label="Retry Attempts (1-10)",
+        value="3",
+        width=300,
+        helper_text="Number of retries on failure",
+        text_size=14,
+        border_color=ft.colors.BLUE_200,
+        height=65,
+    )
+
+    auto_cleanup_switch = ft.Switch(
+        label="Auto Cleanup Temporary Files",
+        value=True,
+        label_position=ft.LabelPosition.LEFT,
+        active_color=ft.colors.BLUE_700,
+        active_track_color=ft.colors.BLUE_200,
+    )
+
+    # Voice settings
+    voices = audio_processor.voice_manager.voices.get('voices', [])
+    voice_dropdown = ft.Dropdown(
+        label="Voice",
+        options=[ft.dropdown.Option(voice) for voice in voices],
+        value=audio_processor.settings.get("voice", "en-US-EmmaNeural"),
+        width=300,
+        helper_text="Select voice for text-to-speech conversion",
+        border_color=ft.colors.BLUE_200,
+        height=65,
+    )
+
+    # Sliders for voice adjustments with better value ranges
+    rate_slider = ft.Slider(
+        min=-50,
+        max=50,
+        value=0,
+        label="{value}",
+        divisions=20,
+        width=300,
+    )
+    rate_label = ft.Text("Speech Rate:", size=14, weight=ft.FontWeight.BOLD)
+    rate_value = ft.Text("+0%", size=14, color=ft.colors.BLUE)
+    
+    def on_rate_change(e):
+        try:
+            if e.data and e.data.strip():
+                val = float(e.data)
+                # Convert -50 to +50 range to -100% to +100%
+                percentage = int((val / 50) * 100)
+                rate_value.value = f"{percentage:+d}%"
+                page.update()
+        except ValueError:
+            pass
+
+    rate_slider.on_change = on_rate_change
+
+    volume_slider = ft.Slider(
+        min=-50,
+        max=50,
+        value=0,
+        label="{value}",
+        divisions=20,
+        width=300,
+    )
+    volume_label = ft.Text("Volume:", size=14, weight=ft.FontWeight.BOLD)
+    volume_value = ft.Text("+0%", size=14, color=ft.colors.BLUE)
+    
+    def on_volume_change(e):
+        try:
+            if e.data and e.data.strip():
+                val = float(e.data)
+                # Convert -50 to +50 range to -100% to +100%
+                percentage = int((val / 50) * 100)
+                volume_value.value = f"{percentage:+d}%"
+                page.update()
+        except ValueError:
+            pass
+
+    volume_slider.on_change = on_volume_change
+
+    pitch_slider = ft.Slider(
+        min=-50,
+        max=50,
+        value=0,
+        label="{value}",
+        divisions=20,
+        width=300,
+    )
+    pitch_label = ft.Text("Pitch:", size=14, weight=ft.FontWeight.BOLD)
+    pitch_value = ft.Text("+0Hz", size=14, color=ft.colors.BLUE)
+    
+    def on_pitch_change(e):
+        try:
+            if e.data and e.data.strip():
+                val = float(e.data)
+                # Keep the Hz range as is
+                pitch_value.value = f"{int(val):+d}Hz"
+                page.update()
+        except ValueError:
+            pass
+
+    pitch_slider.on_change = on_pitch_change
+
+    wpm_field = ft.TextField(
+        label="Words per Minute",
+        value="",
+        width=300,
+        helper_text="Optional: 50-600 WPM (leave empty for default)",
+        text_size=14,
+        border_color=ft.colors.BLUE_200,
+        height=65,
+    )
+
+    # Create tabs for settings
+    processing_tab = ft.Tab(
+        text="Processing",
+        content=ft.Container(
+            content=ft.Column([
+                ft.Container(
+                    content=ft.Column([
+                        ft.Container(
+                            content=workers_field,
+                            padding=ft.padding.only(bottom=15)
+                        ),
+                        ft.Container(
+                            content=batch_field,
+                            padding=ft.padding.only(bottom=15)
+                        ),
+                        ft.Container(
+                            content=retry_field,
+                            padding=ft.padding.only(bottom=15)
+                        ),
+                        ft.Container(
+                            content=auto_cleanup_switch,
+                            padding=ft.padding.only(bottom=10)
+                        ),
+                    ]),
+                    padding=20
+                ),
+            ]),
+            padding=10,
+        ),
+    )
+
+    voice_tab = ft.Tab(
+        text="Voice",
+        content=ft.Container(
+            content=ft.Column([
+                ft.Container(
+                    content=ft.Column([
+                        voice_dropdown,
+                        ft.Container(height=20),
+                        ft.Container(
+                            content=ft.Column([
+                                rate_label,
+                                ft.Row([rate_slider, rate_value], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                                ft.Container(height=10),
+                                volume_label,
+                                ft.Row([volume_slider, volume_value], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                                ft.Container(height=10),
+                                pitch_label,
+                                ft.Row([pitch_slider, pitch_value], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            ], spacing=10),
+                        ),
+                        ft.Container(height=20),
+                        wpm_field,
+                    ], spacing=10),
+                    padding=20
+                ),
+            ]),
+            padding=10,
+        ),
+    )
+
+    settings_dialog = ft.AlertDialog(
+        modal=True,
+        title=ft.Text("Settings", size=20, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_700),
+        content=ft.Container(
+            content=ft.Column([
+                ft.Tabs(
+                    selected_index=0,
+                    animation_duration=300,
+                    tabs=[
+                        ft.Tab(
+                            text="Processing",
+                            content=ft.Container(
+                                content=ft.Column([
+                                    ft.Container(
+                                        content=workers_field,
+                                        padding=ft.padding.only(bottom=15)
+                                    ),
+                                    ft.Container(
+                                        content=batch_field,
+                                        padding=ft.padding.only(bottom=15)
+                                    ),
+                                    ft.Container(
+                                        content=retry_field,
+                                        padding=ft.padding.only(bottom=15)
+                                    ),
+                                    ft.Container(
+                                        content=auto_cleanup_switch,
+                                        padding=ft.padding.only(bottom=10)
+                                    ),
+                                ]),
+                                padding=20
+                            ),
+                        ),
+                        ft.Tab(
+                            text="Voice",
+                            content=ft.Container(
+                                content=ft.Column([
+                                    voice_dropdown,
+                                    ft.Row([rate_label, rate_slider, rate_value], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                                    ft.Row([volume_label, volume_slider, volume_value], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                                    ft.Row([pitch_label, pitch_slider, pitch_value], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                                    wpm_field,
+                                ], spacing=10),
+                                padding=20
+                            ),
+                        ),
+                    ],
+                    expand=True,
+                ),
+            ]),
+            width=450,
+            height=400,
+        ),
+        actions=[
+            ft.Row([
+                ft.TextButton(
+                    "Reset to Defaults",
+                    on_click=reset_to_defaults,
+                    style=ft.ButtonStyle(color=ft.colors.BLUE_700)
+                ),
+                ft.Row([
+                    ft.TextButton(
+                        "Cancel",
+                        on_click=close_settings,
+                        style=ft.ButtonStyle(color=ft.colors.GREY_700)
+                    ),
+                    ft.TextButton(
+                        "Save",
+                        on_click=save_settings,
+                        style=ft.ButtonStyle(color=ft.colors.BLUE_700)
+                    ),
+                ]),
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+        ],
+        actions_alignment=ft.MainAxisAlignment.END,
+        on_dismiss=close_settings,
+    )
+    
+    # Settings button (keep it in the original position)
+    settings_btn = ft.IconButton(
+        icon=ft.icons.SETTINGS,
+        tooltip="Settings",
+        on_click=show_settings
+    )
     
     # File picker
     file_picker = ft.FilePicker(
@@ -46,18 +406,6 @@ def main(page: ft.Page):
         style=ft.ButtonStyle(
             shape=ft.RoundedRectangleBorder(radius=8),
         ),
-    )
-    
-    # Voice selection
-    voices = audio_processor.voice_manager.voices.get('voices', [])
-    last_voice = audio_processor.voice_manager.voices.get('last_used_voice', 'en-US-EmmaNeural')
-    
-    voice_dropdown = ft.Dropdown(
-        label="Voice",
-        options=[ft.dropdown.Option(voice) for voice in voices],
-        value=last_voice,
-        width=200,
-        on_change=lambda e: on_voice_change(e)
     )
     
     # Progress indicators
@@ -176,15 +524,6 @@ def main(page: ft.Page):
             convert_btn.disabled = False
             page.update()
     
-    def on_voice_change(e):
-        with open('config.json', 'r+') as f:
-            config = json.load(f)
-            config['last_used_voice'] = e.data
-            f.seek(0)
-            json.dump(config, f)
-            f.truncate()
-        log_message(f"Voice changed to: {e.data}", level='info')
-    
     def toggle_pause():
         nonlocal is_paused
         is_paused = not is_paused
@@ -215,7 +554,7 @@ def main(page: ft.Page):
         try:
             subtitles = subtitle_processor.parse_subtitle_file(file)
             total_segments = len(subtitles)
-            batch_size = 15
+            batch_size = int(batch_field.value)
             
             log_message(
                 f"Processing file: {Path(file).name}",
@@ -391,13 +730,18 @@ def main(page: ft.Page):
             progress_bar.value = 0
             page.update()
     
+    def on_exit(e):
+        audio_processor.shutdown_executor()
+        
+    page.on_close = on_exit
+    
     # Main layout
     main_content = ft.Column([
         ft.Container(
             content=ft.Column([
                 ft.Row([
                     select_file_btn,
-                    voice_dropdown,
+                    settings_btn
                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                 ft.Row([
                     convert_btn,
@@ -453,7 +797,8 @@ def main(page: ft.Page):
     page.add(
         ft.Column([
             main_content,
-            footer
+            footer,
+            settings_dialog
         ], expand=True)
     )
 
