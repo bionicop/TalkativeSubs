@@ -15,7 +15,7 @@ Special thanks to [rany2](https://github.com/rany2) for creating [edge-tts](http
 
 ## Requirements
 
-- Python 3.7+
+- Python 3.11 or 3.12 (I am using 3.12.6)
 - FFmpeg (for audio processing)
 
 ## Installation
