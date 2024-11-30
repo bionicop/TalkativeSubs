@@ -19,6 +19,7 @@ Special thanks to [rany2](https://github.com/rany2) for creating [edge-tts](http
 - FFmpeg (for audio processing)
 
 ## Installation
+**If you prefer a video, here you go [Installation Video](https://youtu.be/AUX5jpSFRhY)**
 
 1. Clone the repository:
 ```bash
