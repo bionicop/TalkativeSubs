@@ -549,45 +549,67 @@ def main(page: ft.Page):
     
     async def process_subtitle_file(file: str, output_folder: Path) -> bool:
         nonlocal current_batch_start, current_file, failed_segments
+        log_message(f"Starting subtitle file processing.", level='info', details=f"Processing file: {file}")
         current_file = file
-        
+
         try:
+            # Parse subtitles from file
             subtitles = subtitle_processor.parse_subtitle_file(file)
             total_segments = len(subtitles)
             batch_size = int(batch_field.value)
-            
+
             log_message(
-                f"Processing file: {Path(file).name}",
-                details=f"Total segments: {total_segments}, Batch size: {batch_size}"
+                "Parsed subtitle file successfully.",
+                level='info',
+                details=f"Total segments parsed: {total_segments}, Batch size configured: {batch_size}"
             )
-            
+
+            # Initialize failed segments for retry logic
             if file not in failed_segments:
                 failed_segments[file] = set()
-            
+                log_message(
+                    "Initialized failed segments tracking.",
+                    level='debug',
+                    details=f"No previously failed segments found."
+                )
+
+            processed_segments = 0
+
             while failed_segments[file] or current_batch_start < total_segments:
                 if not is_converting:
+                    log_message(
+                        "Conversion interrupted by user.",
+                        level='warning',
+                        details=f"Processing terminated early."
+                    )
                     return False
-                
+
                 while is_paused:
+                    log_message(
+                        "Processing paused.",
+                        level='warning',
+                        details=f"Awaiting resume."
+                    )
                     await asyncio.sleep(0.1)
-                
+
                 if failed_segments[file]:
                     failed_batch = list(failed_segments[file])[:batch_size]
                     segments_to_process = [(i, *subtitles[i-1][1:]) for i in failed_batch]
                     failed_segments[file] -= set(failed_batch)
                     log_message(
-                        f"Retrying failed segments",
-                        details=f"Processing {len(failed_batch)} failed segments"
+                        "Retrying failed segments.",
+                        level='warning',
+                        details=f"Retrying {len(failed_batch)} failed segments."
                     )
                 else:
                     end_idx = min(current_batch_start + batch_size, total_segments)
                     segments_to_process = subtitles[current_batch_start:end_idx]
                     log_message(
-                        f"Processing batch {current_batch_start//batch_size + 1}",
+                        "Processing new segment batch.",
                         level='debug',
-                        details=f"Segments {current_batch_start+1} to {end_idx} of {total_segments}"
+                        details=f"Processing segments {current_batch_start+1} to {end_idx} of {total_segments}"
                     )
-                
+
                 try:
                     results = await audio_processor.process_batch(
                         segments_to_process,
@@ -596,48 +618,56 @@ def main(page: ft.Page):
                         current_batch_start,
                         batch_size
                     )
-                    
+
                     success_count = 0
                     for idx, (output_file, success, error) in enumerate(results):
                         if not success:
                             segment_idx = segments_to_process[idx][0]
                             failed_segments[file].add(segment_idx)
-                            
+
                             if "Internet connection lost" in error:
-                                network_status.value = "⚠️ Internet connection lost. Will retry failed segments..."
                                 log_message(
-                                    f"Internet connection lost at segment {segment_idx}",
+                                    "Internet connection lost during processing.",
                                     level='error',
-                                    details=f"Error: {error}"
+                                    details=f"Segment index {segment_idx}: {error}"
                                 )
+                                network_status.value = "⚠️ Internet connection lost. Will retry failed segments..."
                                 page.update()
                                 await asyncio.sleep(2)
                             else:
                                 log_message(
-                                    f"Error processing segment {segment_idx}",
+                                    "Error processing segment.",
                                     level='error',
-                                    details=f"Error: {error}"
+                                    details=f"Segment index {segment_idx}: {error}"
                                 )
                         else:
                             success_count += 1
-                    
+                            processed_segments += 1
+
                     if success_count > 0:
                         log_message(
-                            f"Batch completed",
+                            "Successfully processed batch.",
                             level='success',
-                            details=f"Successfully processed {success_count}/{len(results)} segments"
+                            details=f"Successfully processed {success_count}/{len(results)} segments."
                         )
-                    
+
+                    # Update progress bar after each successful batch
                     if not failed_segments[file]:
                         current_batch_start = min(current_batch_start + batch_size, total_segments)
-                        progress = min(current_batch_start / total_segments, 1.0)
+                        progress = processed_segments / total_segments
+                        progress_bar.value = progress
                         status_text.value = f"Converting: {int(progress * 100)}%"
-                        network_status.value = ""
                         page.update()
-                    
+
+                        log_message(
+                            "Progress updated.",
+                            level='debug',
+                            details=f"Progress: {int(progress * 100)}%"
+                        )
+
                 except Exception as e:
                     log_message(
-                        f"Batch processing error",
+                        "Unexpected error occurred during batch processing.",
                         level='error',
                         details=f"Error: {str(e)}"
                     )
@@ -645,32 +675,33 @@ def main(page: ft.Page):
                         failed_segments[file].add(segment[0])
                     await asyncio.sleep(1)
                     continue
-            
+
             if not failed_segments[file]:
                 output_file = Path(file).parent / f"{Path(file).stem}_audio.mp3"
                 audio_files = list(output_folder.glob("*.mp3"))
                 log_message(
-                    "Combining audio files",
-                    details=f"Combining {len(audio_files)} segments with timing"
+                    "Combining audio files.",
+                    level='info',
+                    details=f"Combining {len(audio_files)} audio files with timing adjustments."
                 )
                 audio_processor.combine_audio_files(subtitles, audio_files, output_file)
                 log_message(
-                    f"Created combined audio: {output_file.name}",
+                    "Audio combination completed successfully.",
                     level='success',
-                    details=f"Output size: {output_file.stat().st_size / (1024*1024):.2f} MB"
+                    details=f"Output file: {output_file.name}, Size: {output_file.stat().st_size / (1024 * 1024):.2f} MB"
                 )
                 return True
             else:
                 log_message(
-                    f"Cannot complete file {Path(file).name}",
+                    "Failed segments remain after processing.",
                     level='error',
-                    details=f"Failed segments: {len(failed_segments[file])}"
+                    details=f"Total failed segments: {len(failed_segments[file])}"
                 )
                 return False
-            
+
         except Exception as e:
             log_message(
-                f"Failed to process {Path(file).name}",
+                "Unexpected exception during subtitle file processing.",
                 level='error',
                 details=f"Error: {str(e)}"
             )
@@ -678,7 +709,13 @@ def main(page: ft.Page):
         finally:
             current_file = None
             current_batch_start = 0
-    
+            log_message(
+                "Final cleanup complete.",
+                level='debug',
+                details="Resetting internal state after subtitle processing attempt."
+            )
+
+
     async def start_conversion():
         nonlocal is_converting, failed_segments
         convert_btn.disabled = True

@@ -88,7 +88,7 @@ class SubtitleProcessor:
 
     def parse_subtitle_file(self, file_path: str) -> List[Tuple[int, str, str, str]]:
         """Parse SRT file and return list of (index, start_time, end_time, text)"""
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, 'r', encoding='utf-8-sig') as f:
             content = f.read()
 
         blocks = re.split(r'\n\n+', content.strip())
@@ -97,11 +97,15 @@ class SubtitleProcessor:
         for block in blocks:
             lines = block.splitlines()
             if len(lines) >= 3:
-                index = int(lines[0])
-                timing = lines[1]
-                text = ' '.join(lines[2:])
-                start_time, end_time = timing.split(' --> ')
-                subtitles.append((index, start_time, end_time, text))
+                try:
+                    index = int(lines[0].strip())
+                    timing = lines[1]
+                    text = ' '.join(lines[2:])
+                    start_time, end_time = timing.split(' --> ')
+                    subtitles.append((index, start_time, end_time, text))
+                except ValueError as e:
+                    print(f"Error parsing block: {block}, Error: {e}")
+                    continue
 
         return subtitles
 
