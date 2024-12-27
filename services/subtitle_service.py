@@ -1,15 +1,49 @@
 from pathlib import Path
+import re
 import json
 import time
 from typing import List, Tuple
-import re
+from utils.subtitle_formatter import SubtitleFormatter
+
+class WhisperSubtitleService:
+    def __init__(self):
+        self.formatter = SubtitleFormatter()
+
+    def generate_subtitles(self, model, audio_path):
+        try:
+            print(f"Transcribing audio with Whisper model: {model}...")
+            result = model.transcribe(audio_path)
+            subtitles = self._format_segments(result["segments"])
+            detected_language = result.get("language", "en")
+            return subtitles, detected_language
+        except Exception as e:
+            print(f"Error generating subtitles: {str(e)}")
+            raise
+
+    def _format_segments(self, segments):
+        srt_content = ""
+        for i, segment in enumerate(segments, 1):
+            start_time = self.formatter.format_timestamp(segment['start'])
+            end_time = self.formatter.format_timestamp(segment['end'])
+            text = segment['text'].strip()
+            srt_content += self.formatter.format_subtitle_segment(i, start_time, end_time, text)
+        return srt_content
+
+    def save_subtitles(self, subtitles, output_path):
+        try:
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(subtitles)
+            print(f"Subtitles saved to: {output_path}")
+        except Exception as e:
+            print(f"Error saving subtitles: {str(e)}")
+            raise
 
 class SubtitleProcessor:
     def __init__(self):
-        self.temp_dir = Path("temp_subtitles")
+        self.temp_dir = Path("temp/temp_subtitles")
         self.progress_file = self.temp_dir / "progress.json"
-        self.setup_temp_directory()
         self.settings = self._load_settings()
+        self.setup_temp_directory()
 
     def _load_settings(self) -> dict:
         try:
@@ -26,24 +60,21 @@ class SubtitleProcessor:
         }
 
     def setup_temp_directory(self):
-        """Create temp directory if it doesn't exist and clean old files"""
+        # Ensure the parent 'temp' directory exists
+        self.temp_dir.parent.mkdir(parents=True, exist_ok=True)
+        # Create the 'temp_subtitles' directory
         self.temp_dir.mkdir(exist_ok=True)
         self._cleanup_old_files()
 
     def _cleanup_old_files(self):
-        """Clean up old temporary files based on settings"""
         try:
             cleanup_days = self.settings.get("cleanup_days", 7)
             current_time = time.time()
             max_age = cleanup_days * 24 * 60 * 60
-            
-            # Clean up old progress files
             if self.progress_file.exists():
                 file_age = current_time - self.progress_file.stat().st_mtime
                 if file_age > max_age:
                     self.progress_file.unlink()
-            
-            # Clean up old temp directories
             for dir_path in self.temp_dir.iterdir():
                 if dir_path.is_dir():
                     dir_age = current_time - dir_path.stat().st_mtime
@@ -58,7 +89,6 @@ class SubtitleProcessor:
             print(f"Error cleaning up old files: {e}")
 
     def save_progress(self, file_id: str, completed_segments: List[int]):
-        """Save processing progress to a JSON file"""
         progress_data = {
             "file_id": file_id,
             "completed_segments": completed_segments,
@@ -68,7 +98,6 @@ class SubtitleProcessor:
             json.dump(progress_data, f)
 
     def load_progress(self, file_id: str) -> List[int]:
-        """Load processing progress from JSON file"""
         try:
             if self.progress_file.exists():
                 with open(self.progress_file, 'r') as f:
@@ -80,20 +109,16 @@ class SubtitleProcessor:
         return []
 
     def create_subtitle_folder(self, subtitle_file: str) -> Path:
-        """Create a dedicated folder for each subtitle file"""
         folder_name = Path(subtitle_file).stem
         folder_path = self.temp_dir / folder_name
         folder_path.mkdir(exist_ok=True)
         return folder_path
 
     def parse_subtitle_file(self, file_path: str) -> List[Tuple[int, str, str, str]]:
-        """Parse SRT file and return list of (index, start_time, end_time, text)"""
         with open(file_path, 'r', encoding='utf-8-sig') as f:
             content = f.read()
-
         blocks = re.split(r'\n\n+', content.strip())
         subtitles = []
-
         for block in blocks:
             lines = block.splitlines()
             if len(lines) >= 3:
@@ -106,11 +131,9 @@ class SubtitleProcessor:
                 except ValueError as e:
                     print(f"Error parsing block: {block}, Error: {e}")
                     continue
-
         return subtitles
 
     def clean_temp_files(self, folder: Path):
-        """Clean up temporary files after processing"""
         if folder.exists():
             for file in folder.glob("*.mp3"):
                 file.unlink()

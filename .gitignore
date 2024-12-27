@@ -46,7 +46,14 @@ config.json
 *.log
 logs/
 
-# Test cache
-.pytest_cache/
-.coverage
-htmlcov/
+# Temp files
+temp/
+*.tmp
+
+# Local settings
+app_settings.json
+voice_config.json
+
+# Whisper models
+models/
+*.pt
