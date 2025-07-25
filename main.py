@@ -1,3 +1,7 @@
+from utils import temporary_cgi_fix
+import sys
+sys.modules['cgi'] = temporary_cgi_fix
+
 import flet as ft
 from screens.audio_to_sub_screen import AudioToSubScreen
 from screens.sub_to_audio_screen import SubToAudioScreen
